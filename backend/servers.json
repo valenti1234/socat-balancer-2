@@ -1,0 +1,50 @@
+{
+    "services": [
+        {
+            "name": "http",
+            "listen_port": 80,
+            "servers": [
+                {
+                    "ip": "127.0.0.1",
+                    "port": 8080,
+                    "check_type": "http",
+                    "http_path": "/"
+                },
+                {
+                    "ip": "127.0.0.2",
+                    "port": 8080,
+                    "check_type": "http",
+                    "http_path": "/"
+                }
+            ]
+        },
+        {
+            "name": "smpp",
+            "listen_port": 2775,
+            "servers": [
+                {
+                    "ip": "192.168.1.1",
+                    "port": 2775,
+                    "check_type": "smpp"
+                },
+                {
+                    "ip": "192.168.1.2",
+                    "port": 2775,
+                    "check_type": "smpp"
+                }
+            ]
+        },
+        {
+            "name": "Alaris bind",
+            "listen_port": 15100,
+            "servers": [
+                {
+                    "ip": "string",
+                    "port": 0,
+                    "check_type": "tcp"
+                }
+            ]
+        }
+    ],
+    "mode": "failover"
+}
