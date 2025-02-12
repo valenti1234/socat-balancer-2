@@ -13,9 +13,8 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-import ipaddress  # Import at the top of your file if not already imported.
-
+from pydantic import BaseModel, Field
+import ipaddress
 
 # ====================================================
 # Configuration
@@ -57,15 +56,16 @@ def load_config():
         with open(CONFIG_FILE, "r") as f:
             return json.load(f)
     else:
+        # Default config with an empty service list.
         return {"services": [], "mode": "failover"}
 
 def save_config():
     with open(CONFIG_FILE, "w") as f:
-        json.dump({"services": SERVICES, "mode": MODE}, f, indent=4)
+        json.dump({"services": SERVICES}, f, indent=4)
 
 config = load_config()
 SERVICES = config.get("services", [])
-MODE = config.get("mode", "failover")
+# Note: The global MODE is no longer used—each service uses its own "mode" property.
 
 # ====================================================
 # HEALTH CHECK FUNCTIONS
@@ -108,13 +108,15 @@ server_status = {}
 # BACKGROUND HEALTH CHECK / SOCAT UPDATE THREAD
 # ====================================================
 def update_servers():
-    global server_status, MODE, SERVICES, service_state, event_loop
+    global server_status, SERVICES, service_state, event_loop
     while True:
         for service in SERVICES:
             service_name = service.get("name")
             listen_port = service.get("listen_port")
+            # Each service may have its own mode; default to "failover"
+            mode_for_service = service.get("mode", "failover")
             healthy_servers = []
-            # Reset the status for this service.
+            # Reset status for this service.
             server_status[service_name] = {}
             
             for server in service.get("servers", []):
@@ -135,26 +137,29 @@ def update_servers():
                     healthy_servers.append(f"{ip}:{port}")
             
             if healthy_servers:
-                # Choose healthy server based on load-balancing mode.
-                if MODE == "failover":
+                # Choose backend according to the service's mode.
+                if mode_for_service == "failover":
                     selected_server = healthy_servers[0]
-                else:  # round-robin
+                elif mode_for_service == "round-robin":
                     idx = service_state[service_name]["index"]
                     selected_server = healthy_servers[idx % len(healthy_servers)]
                     service_state[service_name]["index"] = idx + 1
+                else:
+                    # Fallback to failover if mode is unknown.
+                    selected_server = healthy_servers[0]
 
-                # If the selected backend has changed, update socat.
+                # Update socat if the backend has changed.
                 if selected_server != service_state[service_name]["last_active"]:
-                    log_message = f"Routing traffic on port {listen_port} to {selected_server} for service '{service_name}'"
+                    log_message = f"Routing traffic on port {listen_port} to {selected_server} for service '{service_name}' (mode: {mode_for_service})"
                     print(log_message)
                     if event_loop:
                         asyncio.run_coroutine_threadsafe(manager.broadcast(log_message), event_loop)
-                    # Terminate the previous socat process, if any.
+                    # Terminate previous socat process.
                     prev_proc = service_state[service_name]["process"]
                     if prev_proc and prev_proc.poll() is None:
                         prev_proc.terminate()
                         prev_proc.wait()
-                    # Start a new socat process.
+                    # Start new socat process.
                     cmd = [
                         "socat",
                         f"TCP-LISTEN:{listen_port},fork,reuseaddr",
@@ -168,7 +173,7 @@ def update_servers():
                 print(log_message)
                 if event_loop:
                     asyncio.run_coroutine_threadsafe(manager.broadcast(log_message), event_loop)
-                # Terminate any running socat process if no healthy server.
+                # Terminate any running socat process.
                 prev_proc = service_state[service_name]["process"]
                 if prev_proc and prev_proc.poll() is None:
                     prev_proc.terminate()
@@ -204,6 +209,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Mount the assets folder to serve static files.
 app.mount("/assets", StaticFiles(directory="assets"), name="assets")
 
 # ====================================================
@@ -214,8 +220,7 @@ async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
-            # Keep the connection open. (You can also handle incoming messages here if needed.)
-            await websocket.receive_text()
+            await websocket.receive_text()  # Keep connection open.
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
@@ -242,18 +247,20 @@ class RemoveServerRequest(BaseModel):
     ip: str
     port: int
 
-class SetModeRequest(BaseModel):
-    mode: str
+class SetServiceModeRequest(BaseModel):
+    service: str
+    mode: str = Field(..., pattern="^(failover|round-robin)$", description="Mode must be either 'failover' or 'round-robin'")
 
 class AddServiceRequest(BaseModel):
     name: str
     listen_port: int
+    mode: Optional[str] = "failover"  # New services default to failover if not specified.
 
-# New models for editing and removing services.
 class EditServiceRequest(BaseModel):
     name: str
     new_name: Optional[str] = None
     listen_port: Optional[int] = None
+    mode: Optional[str] = None  # Allow updating the mode.
 
 class RemoveServiceRequest(BaseModel):
     name: str
@@ -261,13 +268,15 @@ class RemoveServiceRequest(BaseModel):
 # ====================================================
 # FastAPI Endpoints for Load Balancer & Management
 # ====================================================
+# Serve the main HTML page.
 @app.get("/", response_class=FileResponse)
 def read_index():
-    return "assets/index.html"
+    # Return the index.html file from the assets folder.
+    return FileResponse("assets/index.html")
 
 @app.get("/api/status")
 def api_status():
-    return {"services": server_status, "mode": MODE}
+    return {"services": server_status}
 
 @app.get("/api/list_services")
 def list_services():
@@ -307,8 +316,6 @@ def edit_server(req: EditServerRequest):
 
     raise HTTPException(status_code=404, detail="Server not found in service group")
 
-
-
 @app.post("/api/add_server")
 def add_server(req: AddServerRequest):
     service_name = req.service
@@ -321,31 +328,26 @@ def add_server(req: AddServerRequest):
     if not service:
         raise HTTPException(status_code=404, detail="Service group not found")
     
-    # Validate that the IP address is valid.
+    # Validate the IP address.
     try:
         ipaddress.ip_address(ip)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid IP address")
     
-    # Validate that the port is in the range 1 to 65535.
+    # Validate port range.
     if not (1 <= port <= 65535):
-        raise HTTPException(status_code=400, detail="Invalid port number, must be between 1 and 65535")
+        raise HTTPException(status_code=400, detail="Port number must be between 1 and 65535")
     
-    # Check if a server with the same IP and port already exists in the service group.
     if any(s["ip"] == ip and int(s["port"]) == int(port) for s in service.get("servers", [])):
         raise HTTPException(status_code=400, detail="Server already exists in service group")
 
-    # Create the new server object.
     new_server = {"ip": ip, "port": int(port), "check_type": check_type}
     if check_type == "http":
         new_server["http_path"] = req.http_path
 
-    # Append the new server and persist the configuration.
     service.setdefault("servers", []).append(new_server)
     save_config()
     return {"message": f"Server {ip}:{port} added successfully to service '{service_name}'"}
-
-
 
 @app.post("/api/remove_server")
 def remove_server(req: RemoveServerRequest):
@@ -365,67 +367,68 @@ def remove_server(req: RemoveServerRequest):
 
     raise HTTPException(status_code=404, detail="Server not found in service group")
 
-@app.post("/api/set_mode")
-def set_mode(req: SetModeRequest):
-    global MODE
+@app.post("/api/set_service_mode")
+def set_service_mode(req: SetServiceModeRequest):
+    service_name = req.service
     mode = req.mode
-    if mode in ["failover", "round-robin"]:
-        MODE = mode
-        save_config()
-        return {"message": f"Mode changed to {MODE}"}
-    raise HTTPException(status_code=400, detail="Invalid mode")
+    # Validate that the service exists.
+    service = next((s for s in SERVICES if s.get("name") == service_name), None)
+    if not service:
+        raise HTTPException(status_code=404, detail="Service not found")
+    # Update the mode for the service.
+    service["mode"] = mode
+    save_config()
+    return {"message": f"Mode for service '{service_name}' changed to {mode}"}
 
 @app.post("/api/add_service")
 def add_service(req: AddServiceRequest):
     name = req.name
     listen_port = req.listen_port
-
+    mode = req.mode  # Either "failover" or "round-robin"
     if not name or not listen_port:
         raise HTTPException(status_code=400, detail="Missing name or listen_port")
     if any(s.get("name") == name for s in SERVICES):
         raise HTTPException(status_code=400, detail="Service group already exists")
 
-    new_service = {"name": name, "listen_port": int(listen_port), "servers": []}
+    new_service = {"name": name, "listen_port": int(listen_port), "mode": mode, "servers": []}
     SERVICES.append(new_service)
     service_state[name] = {"last_active": None, "index": 0, "process": None}
     save_config()
     return {"message": f"Service '{name}' added successfully"}
 
-# --- New Endpoints for Editing and Removing a Service ---
-
 @app.post("/api/edit_service")
 def edit_service(req: EditServiceRequest):
-    global SERVICES, service_state
     service = next((s for s in SERVICES if s.get("name") == req.name), None)
     if not service:
         raise HTTPException(status_code=404, detail="Service not found")
     old_name = service.get("name")
-    # Update service name if a new name is provided.
+    # Update service name if provided.
     if req.new_name:
         if any(s.get("name") == req.new_name for s in SERVICES):
             raise HTTPException(status_code=400, detail="A service with that new name already exists")
         service["name"] = req.new_name
-        # Update the service_state dictionary accordingly.
         service_state[req.new_name] = service_state.pop(old_name)
-    # Update the listen_port if provided.
     if req.listen_port:
         service["listen_port"] = req.listen_port
-        # Kill any running socat process so it can be restarted.
+        # Restart socat if needed.
         state = service_state[service.get("name")]
         if state["process"] and state["process"].poll() is None:
             state["process"].terminate()
             state["process"].wait()
             state["last_active"] = None
+    if req.mode:
+        if req.mode not in ["failover", "round-robin"]:
+            raise HTTPException(status_code=400, detail="Invalid mode")
+        service["mode"] = req.mode
     save_config()
     return {"message": f"Service '{req.name}' updated successfully."}
 
 @app.post("/api/remove_service")
 def remove_service(req: RemoveServiceRequest):
-    global SERVICES, service_state
     service = next((s for s in SERVICES if s.get("name") == req.name), None)
     if not service:
         raise HTTPException(status_code=404, detail="Service not found")
-    # Kill any running socat process.
+    # Terminate any running socat process.
     state = service_state.get(req.name)
     if state and state["process"] and state["process"].poll() is None:
         state["process"].terminate()

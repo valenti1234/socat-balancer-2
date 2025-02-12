@@ -1,50 +1,33 @@
 {
     "services": [
         {
-            "name": "http",
-            "listen_port": 80,
+            "name": "omni",
+            "listen_port": 15600,
+            "mode": "failover",
             "servers": [
                 {
-                    "ip": "127.0.0.1",
-                    "port": 8080,
-                    "check_type": "http",
-                    "http_path": "/"
-                },
-                {
-                    "ip": "127.0.0.2",
-                    "port": 8080,
-                    "check_type": "http",
-                    "http_path": "/"
+                    "ip": "172.16.20.71",
+                    "port": 3000,
+                    "check_type": "tcp"
                 }
             ]
         },
         {
-            "name": "smpp",
-            "listen_port": 2775,
+            "name": "hlr",
+            "listen_port": 8080,
+            "mode": "failover",
             "servers": [
                 {
-                    "ip": "192.168.1.1",
-                    "port": 2775,
-                    "check_type": "smpp"
+                    "ip": "172.16.18.68",
+                    "port": 8080,
+                    "check_type": "tcp"
                 },
                 {
-                    "ip": "192.168.1.2",
-                    "port": 2775,
-                    "check_type": "smpp"
-                }
-            ]
-        },
-        {
-            "name": "Alaris bind",
-            "listen_port": 15100,
-            "servers": [
-                {
-                    "ip": "string",
-                    "port": 0,
+                    "ip": "172.16.20.68",
+                    "port": 8080,
                     "check_type": "tcp"
                 }
             ]
         }
-    ],
-    "mode": "failover"
+    ]
 }
