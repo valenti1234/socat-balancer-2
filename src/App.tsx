@@ -35,6 +35,7 @@ function App() {
   const [showEditServiceModal, setShowEditServiceModal] = useState(false);
   const [selectedServiceForServer, setSelectedServiceForServer] = useState<string>('');
   const [selectedServiceForEdit, setSelectedServiceForEdit] = useState<Service | null>(null);
+  const refreshIntervalRef = useRef<number>();
 
   const [newService, setNewService] = useState({
     name: '',
@@ -56,6 +57,10 @@ function App() {
     http_path: '/'
   });
 
+  const clearLogs = () => {
+    setLogs([]);
+  };
+
   useEffect(() => {
     checkBackendStatus();
     const interval = setInterval(() => {
@@ -64,7 +69,32 @@ function App() {
       }
     }, 5000);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      if (refreshIntervalRef.current) {
+        clearInterval(refreshIntervalRef.current);
+      }
+    };
+  }, [backendAvailable]);
+
+  // Add auto-refresh effect
+  useEffect(() => {
+    if (backendAvailable) {
+      // Initial fetch
+      fetchData();
+      
+      // Set up interval for auto-refresh every 15 seconds
+      refreshIntervalRef.current = window.setInterval(() => {
+        fetchData();
+      }, 15000);
+
+      // Cleanup interval on unmount or when backend becomes unavailable
+      return () => {
+        if (refreshIntervalRef.current) {
+          clearInterval(refreshIntervalRef.current);
+        }
+      };
+    }
   }, [backendAvailable]);
 
   const checkBackendStatus = async () => {
@@ -290,7 +320,9 @@ function App() {
 
       setNewServer({ ip: '', port: '', check_type: 'tcp', http_path: '/' });
       setShowAddServerModal(false);
-      fetchData();
+      
+      // Refresh the services list and status immediately after adding a server
+      await fetchData();
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Failed to add server');
     }
@@ -519,7 +551,16 @@ function App() {
           </div>
 
           <div className="bg-white shadow rounded-lg p-6">
-            <h2 className="text-lg font-medium text-gray-900 mb-6">Real-time Logs</h2>
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-lg font-medium text-gray-900">Real-time Logs</h2>
+              <button
+                onClick={clearLogs}
+                className="inline-flex items-center px-3 py-1.5 border border-transparent text-sm font-medium rounded-md text-indigo-600 bg-indigo-100 hover:bg-indigo-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+              >
+                <X className="h-4 w-4 mr-1" />
+                Clear Logs
+              </button>
+            </div>
             <div className="h-[600px] overflow-y-auto bg-gray-50 rounded-lg p-4">
               {logs.map((log, index) => (
                 <div key={index} className="text-sm text-gray-600 mb-2">
@@ -692,7 +733,7 @@ function App() {
         <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg max-w-md w-full p-6">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-medium text-gray-900">Add New Server</h3>
+              <h3 className="text-lg font-medium text-gray-900">Add New Server</h3 >
               <button
                 onClick={() => setShowAddServerModal(false)}
                 className="text-gray-400 hover:text-gray-500"
@@ -711,7 +752,6 @@ function App() {
                     id="ip"
                     value={newServer.ip}
                     onChange={(e) => setNewServer(prev => ({ ...prev, ip: e.target.value }))}
-                    pattern="^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
                     placeholder="e.g., 192.168.1.1"
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
                     required
@@ -719,7 +759,7 @@ function App() {
                 </div>
                 <div>
                   <label htmlFor="port" className="block text-sm font-medium text-gray-700">
-                     Port
+                    Port
                   </label>
                   <input
                     type="number"

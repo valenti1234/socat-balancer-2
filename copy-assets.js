@@ -8,9 +8,14 @@ const __dirname = path.dirname(__filename);
 
 async function copyAssets() {
   const sourceDir = path.join(__dirname, 'dist'); // Changed to 'dist'
-  const destinationDir = path.join(__dirname, 'backend');
+  const destinationDir = path.join(__dirname, 'backend/public/');
 
   try {
+    // Remove the destination directory (and all its contents) if it exists.
+    await fs.rm(destinationDir, { recursive: true, force: true });
+    console.log(`Removed destination directory: ${destinationDir}`);
+
+    // Recreate the destination directory.
     await fs.mkdir(destinationDir, { recursive: true });
 
     const entries = await fs.readdir(sourceDir, { withFileTypes: true });
@@ -23,7 +28,7 @@ async function copyAssets() {
         await copyDirectory(sourcePath, destinationPath);
       } else {
         await fs.copyFile(sourcePath, destinationPath);
-        console.log(`Copied ${entry.name} to ${destinationDir}`); // Updated log message
+        console.log(`Copied ${entry.name} to ${destinationDir}`);
       }
     }
 
@@ -53,6 +58,5 @@ async function copyDirectory(source, destination) {
     console.error(`Error copying directory ${source}:`, err);
   }
 }
-
 
 copyAssets();
