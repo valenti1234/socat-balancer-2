@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Activity, Server, Settings, Plus, Edit2, Trash2, RefreshCcw, AlertCircle, X, BarChart, Power } from 'lucide-react';
+import { Activity, Server, Settings, Plus, Edit2, Trash2, RefreshCcw, AlertCircle, X, BarChart, Power, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface Server {
   ip: string;
@@ -72,6 +72,9 @@ function App() {
   const refreshIntervalRef = useRef<number>();
   const [socatStats, setSocatStats] = useState<SocatStats>({});
   const [serverStats, setServerStats] = useState<ServerStats>({});
+  const [servicesExpanded, setServicesExpanded] = useState(true);
+  const [statsExpanded, setStatsExpanded] = useState(true);
+  const [logsExpanded, setLogsExpanded] = useState(true);
 
   const [newService, setNewService] = useState({
     name: '',
@@ -526,7 +529,15 @@ function App() {
           <div className="lg:col-span-2 space-y-6">
             <div className="bg-white shadow rounded-lg p-6">
               <div className="flex justify-between items-center mb-6">
-                <h2 className="text-lg font-medium text-gray-900">Services</h2>
+                <div className="flex items-center space-x-2">
+                  <h2 className="text-lg font-medium text-gray-900">Services</h2>
+                  <button
+                    onClick={() => setServicesExpanded(!servicesExpanded)}
+                    className="p-1 text-gray-400 hover:text-gray-500"
+                  >
+                    {servicesExpanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
+                  </button>
+                </div>
                 <button
                   onClick={fetchData}
                   className="inline-flex items-center px-3 py-1.5 border border-transparent text-sm font-medium rounded-md text-indigo-600 bg-indigo-100 hover:bg-indigo-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
@@ -536,150 +547,160 @@ function App() {
                 </button>
               </div>
 
-              {isLoading ? (
-                <div className="flex justify-center items-center h-32">
-                  <Activity className="h-8 w-8 text-indigo-600 animate-spin" />
-                </div>
-              ) : services.length === 0 ? (
-                <div className="text-center py-12">
-                  <p className="text-gray-500">No services configured yet</p>
-                  <button 
-                    onClick={() => setShowAddServiceModal(true)}
-                    className="mt-4 inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                  >
-                    <Plus className="h-4 w-4 mr-1" />
-                    Add First Service
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {services.map((service) => (
-                    <div
-                      key={service.name}
-                      className="border rounded-lg p-4 hover:border-indigo-500 transition-colors cursor-pointer"
-                      onClick={() => setSelectedService(service.name)}
+              {servicesExpanded && (
+                isLoading ? (
+                  <div className="flex justify-center items-center h-32">
+                    <Activity className="h-8 w-8 text-indigo-600 animate-spin" />
+                  </div>
+                ) : services.length === 0 ? (
+                  <div className="text-center py-12">
+                    <p className="text-gray-500">No services configured yet</p>
+                    <button 
+                      onClick={() => setShowAddServiceModal(true)}
+                      className="mt-4 inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
                     >
-                      <div className="flex justify-between items-start mb-4">
-                        <div>
-                          <h3 className="text-lg font-medium text-gray-900">{service.name}</h3>
-                          <p className="text-sm text-gray-500">Port: {service.listen_port}</p>
-                          {socatStats[service.name] && (
-                            <div className="mt-2 text-sm text-gray-600">
-                              <p>Traffic: {formatBytes(socatStats[service.name].bytes_transferred)}</p>
-                              <p>Last Active: {socatStats[service.name].last_active || 'None'}</p>
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex space-x-2">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleModeChange(service.name);
-                            }}
-                            className="px-3 py-1.5 text-sm font-medium rounded-md text-indigo-600 bg-indigo-100 hover:bg-indigo-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                          >
-                            <Settings className="h-4 w-4 inline-block mr-1" />
-                            {service.mode}
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openEditServiceModal(service);
-                            }}
-                            className="p-1 text-gray-400 hover:text-indigo-600"
-                          >
-                            <Edit2 className="h-4 w-4" />
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleRemoveService(service.name);
-                            }}
-                            className="p-1 text-gray-400 hover:text-red-600"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="space-y-2">
-                        {service.servers.map((server) => {
-                          const serverKey = `${service.name}:${server.ip}:${server.port}`;
-                          const serverStat = serverStats[serverKey];
-                          
-                          return (
-                            <div
-                              key={`${server.ip}:${server.port}`}
-                              className="flex justify-between items-center bg-gray-50 rounded p-2"
+                      <Plus className="h-4 w-4 mr-1" />
+                      Add First Service
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {services.map((service) => (
+                      <div
+                        key={service.name}
+                        className="border rounded-lg p-4 hover:border-indigo-500 transition-colors cursor-pointer"
+                        onClick={() => setSelectedService(service.name)}
+                      >
+                        <div className="flex justify-between items-start mb-4">
+                          <div>
+                            <h3 className="text-lg font-medium text-gray-900">{service.name}</h3>
+                            <p className="text-sm text-gray-500">Port: {service.listen_port}</p>
+                            {socatStats[service.name] && (
+                              <div className="mt-2 text-sm text-gray-600">
+                                <p>Traffic: {formatBytes(socatStats[service.name].bytes_transferred)}</p>
+                                <p>Last Active: {socatStats[service.name].last_active || 'None'}</p>
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex space-x-2">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleModeChange(service.name);
+                              }}
+                              className="px-3 py-1.5 text-sm font-medium rounded-md text-indigo-600 bg-indigo-100 hover:bg-indigo-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
                             >
-                              <div>
-                                <p className="text-sm font-medium">{server.ip}:{server.port}</p>
-                                <p className="text-xs text-gray-500">Type: {server.check_type}</p>
-                                {serverStat && (
-                                  <p className="text-xs text-gray-600">
-                                    Traffic: {formatBytes(serverStat.bytes_transferred)}
-                                  </p>
-                                )}
+                              <Settings className="h-4 w-4 inline-block mr-1" />
+                              {service.mode}
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openEditServiceModal(service);
+                              }}
+                              className="p-1 text-gray-400 hover:text-indigo-600"
+                            >
+                              <Edit2 className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRemoveService(service.name);
+                              }}
+                              className="p-1 text-gray-400 hover:text-red-600"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          {service.servers.map((server) => {
+                            const serverKey = `${service.name}:${server.ip}:${server.port}`;
+                            const serverStat = serverStats[serverKey];
+                            
+                            return (
+                              <div
+                                key={`${server.ip}:${server.port}`}
+                                className="flex justify-between items-center bg-gray-50 rounded p-2"
+                              >
+                                <div>
+                                  <p className="text-sm font-medium">{server.ip}:{server.port}</p>
+                                  <p className="text-xs text-gray-500">Type: {server.check_type}</p>
+                                  {serverStat && (
+                                    <p className="text-xs text-gray-600">
+                                      Traffic: {formatBytes(serverStat.bytes_transferred)}
+                                    </p>
+                                  )}
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                                    status[service.name]?.[`${server.ip}:${server.port} (${server.check_type})`]?.includes('UP')
+                                      ? 'bg-green-100 text-green-800'
+                                      : 'bg-red-100 text-red-800'
+                                  }`}>
+                                    {status[service.name]?.[`${server.ip}:${server.port} (${server.check_type})`] || 'Unknown'}
+                                  </span>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleToggleServer(service.name, server.ip, server.port, server.enabled ?? true);
+                                    }}
+                                    className={`p-1 ${server.enabled ? 'text-green-600' : 'text-gray-400'} hover:text-indigo-600`}
+                                    title={server.enabled ? 'Disable Server' : 'Enable Server'}
+                                  >
+                                    <Power className="h-4 w-4" />
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleRemoveServer(service.name, server.ip, server.port);
+                                    }}
+                                    className="p-1 text-gray-400 hover:text-red-600"
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </button>
+                                </div>
                               </div>
-                              <div className="flex items-center space-x-2">
-                                <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                                  status[service.name]?.[`${server.ip}:${server.port} (${server.check_type})`]?.includes('UP')
-                                    ? 'bg-green-100 text-green-800'
-                                    : 'bg-red-100 text-red-800'
-                                }`}>
-                                  {status[service.name]?.[`${server.ip}:${server.port} (${server.check_type})`] || 'Unknown'}
-                                </span>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleToggleServer(service.name, server.ip, server.port, server.enabled ?? true);
-                                  }}
-                                  className={`p-1 ${server.enabled ? 'text-green-600' : 'text-gray-400'} hover:text-indigo-600`}
-                                  title={server.enabled ? 'Disable Server' : 'Enable Server'}
-                                >
-                                  <Power className="h-4 w-4" />
-                                </button>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleRemoveServer(service.name, server.ip, server.port);
-                                  }}
-                                  className="p-1 text-gray-400 hover:text-red-600"
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openAddServerModal(service.name);
-                          }}
-                          className="w-full flex items-center justify-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                        >
-                          <Plus className="h-4 w-4 mr-1" />
-                          Add Server
-                        </button>
+                            );
+                          })}
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openAddServerModal(service.name);
+                            }}
+                            className="w-full flex items-center justify-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                          >
+                            <Plus className="h-4 w-4 mr-1" />
+                            Add Server
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                  <button 
-                    onClick={() => setShowAddServiceModal(true)}
-                    className="w-full flex items-center justify-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                  >
-                    <Plus className="h-4 w-4 mr-1" />
-                    Add Service
-                  </button>
-                </div>
+                    ))}
+                    <button 
+                      onClick={() => setShowAddServiceModal(true)}
+                      className="w-full flex items-center justify-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                    >
+                      <Plus className="h-4 w-4 mr-1" />
+                      Add Service
+                    </button>
+                  </div>
+                )
               )}
             </div>
 
             {/* Socat Stats Panel */}
             <div className="bg-white shadow rounded-lg p-6">
               <div className="flex justify-between items-center mb-6">
-                <h2 className="text-lg font-medium text-gray-900">Traffic Statistics</h2>
+                <div className="flex items-center space-x-2">
+                  <h2 className="text-lg font-medium text-gray-900">Traffic Statistics</h2>
+                  <button
+                    onClick={() => setStatsExpanded(!statsExpanded)}
+                    className="p-1 text-gray-400 hover:text-gray-500"
+                  >
+                    {statsExpanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
+                  </button>
+                </div>
                 <button
                   onClick={fetchSocatStats}
                   className="inline-flex items-center px-3 py-1.5 border border-transparent text-sm font-medium rounded-md text-indigo-600 bg-indigo-100 hover:bg-indigo-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
@@ -689,49 +710,61 @@ function App() {
                 </button>
               </div>
 
-              <div className="space-y-6">
-                {Object.entries(socatStats).map(([serviceName, stats]) => (
-                  <div key={serviceName} className="border rounded-lg p-4">
-                    <h3 className="text-lg font-medium text-gray-900 mb-2">{serviceName}</h3>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <p className="text-sm text-gray-600">Total Traffic: {formatBytes(stats.bytes_transferred)}</p>
-                        <p className="text-sm text-gray-600">Outbound: {formatBytes(stats.bytes_out)}</p>
-                        <p className="text-sm text-gray-600">Inbound: {formatBytes(stats.bytes_in)}</p>
-                      </div>
-                      <div>
-                        <p className="text-sm text-gray-600">Active Backend: {stats.last_active || 'None'}</p>
-                        <p className="text-sm text-gray-600">Last Started: {formatDate(stats.last_start_time)}</p>
-                        <p className="text-sm text-gray-600">Restarts: {stats.restart_count}</p>
+              {statsExpanded && (
+                <div className="space-y-6">
+                  {Object.entries(socatStats).map(([serviceName, stats]) => (
+                    <div key={serviceName} className="border rounded-lg p-4">
+                      <h3 className="text-lg font-medium text-gray-900 mb-2">{serviceName}</h3>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <p className="text-sm text-gray-600">Total Traffic: {formatBytes(stats.bytes_transferred)}</p>
+                          <p className="text-sm text-gray-600">Outbound: {formatBytes(stats.bytes_out)}</p>
+                          <p className="text-sm text-gray-600">Inbound: {formatBytes(stats.bytes_in)}</p>
+                        </div>
+                        <div>
+                          <p className="text-sm text-gray-600">Active Backend: {stats.last_active || 'None'}</p>
+                          <p className="text-sm text-gray-600">Last Started: {formatDate(stats.last_start_time)}</p>
+                          <p className="text-sm text-gray-600">Restarts: {stats.restart_count}</p>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
           <div className="bg-white shadow rounded-lg p-6">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-lg font-medium text-gray-900">Real-time Logs</h2>
+              <div className="flex items-center space-x-2">
+                <h2 className="text-lg font-medium text-gray-900">Real-time Logs</h2>
+                <button
+                  onClick={() => setLogsExpanded(!logsExpanded)}
+                  className="p-1 text-gray-400 hover:text-gray-500"
+                >
+                  {logsExpanded ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
+                </button>
+              </div>
               <button
                 onClick={clearLogs}
-                className="inline-flex items-center px-3 py-1.5 border border-transparent text-sm font-medium rounded-md text-indigo-600 bg-indigo-100 hover:bg-indigo-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                className="inline-flex items-center px-3 py-1.5 border border-transparent text-sm font-medium rounded-md text-indigo-600 bg-indigo-100 hover:bg-indigo-200 focus:outline- none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
               >
                 <X className="h-4 w-4 mr-1" />
                 Clear Logs
               </button>
             </div>
-            <div className="h-[600px] overflow-y-auto bg-gray-50 rounded-lg p-4">
-              {logs.map((log, index) => (
-                <div key={index} className="text-sm text-gray-600 mb-2">
-                  <span className="text-gray-400">[{new Date().toLocaleTimeString()}]</span> {log}
-                </div>
-              ))}
-              {logs.length === 0 && (
-                <p className="text-gray-500 text-center mt-4">No logs available</p>
-              )}
-            </div>
+            {logsExpanded && (
+              <div className="h-[600px] overflow-y-auto bg-gray-50 rounded-lg p-4">
+                {logs.map((log, index) => (
+                  <div key={index} className="text-sm text-gray-600 mb-2">
+                    <span className="text-gray-400">[{new Date().toLocaleTimeString()}]</span> {log}
+                  </div>
+                ))}
+                {logs.length === 0 && (
+                  <p className="text-gray-500 text-center mt-4">No logs available</p>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </main>
@@ -763,8 +796,7 @@ function App() {
                     required
                   />
                 </div>
-                <div> Continuing with the App.tsx file content from where we left off:
-
+                <div>
                   <label htmlFor="listen_port" className="block text-sm font-medium text-gray-700">
                     Listen Port
                   </label>

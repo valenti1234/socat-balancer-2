@@ -10,7 +10,7 @@
                     "port": 8080,
                     "check_type": "http",
                     "http_path": "/",
-                    "enabled": false
+                    "enabled": true
                 },
                 {
                     "ip": "172.16.18.68",
