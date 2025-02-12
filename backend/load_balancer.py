@@ -23,6 +23,9 @@ import ipaddress
 CONFIG_FILE = "data/servers.json"
 CHECK_INTERVAL = 5  # seconds
 
+# Define a forced rotation interval (in seconds) for round-robin mode.
+ROTATION_INTERVAL = 60  # seconds
+
 # ====================================================
 # Global Variables for Event Loop and WebSocket Manager
 # ====================================================
@@ -66,7 +69,7 @@ def save_config():
 
 config = load_config()
 SERVICES = config.get("services", [])
-# Note: The global MODE is no longer used—each service uses its own "mode" property.
+# Note: Each service uses its own "mode" property.
 
 # ====================================================
 # HEALTH CHECK FUNCTIONS
@@ -96,8 +99,13 @@ def check_smpp(ip, port=2775):
 # ====================================================
 # GLOBALS FOR SERVICE STATE AND SOCAT STATS
 # ====================================================
-# For each service group, track the last active backend, round-robin index, socat process,
-# and additional statistics.
+# For each service group, track:
+#  - last_active: the backend currently in use
+#  - index: round robin index
+#  - process: the socat process
+#  - restart_count: number of times socat was restarted
+#  - last_start_time: timestamp when socat was last started
+#  - bytes_transferred, bytes_out, bytes_in: counters from socat output
 service_state = {}
 for service in SERVICES:
     service_name = service.get("name")
@@ -107,10 +115,23 @@ for service in SERVICES:
         "process": None,
         "restart_count": 0,
         "last_start_time": None,
-        "bytes_transferred": 0,  # combined counter
-        "bytes_out": 0,          # outbound bytes
-        "bytes_in": 0            # inbound bytes
+        "bytes_transferred": 0,
+        "bytes_out": 0,
+        "bytes_in": 0
     }
+
+# We also maintain a separate dictionary to track per-server stats.
+# Keys are in the format "service_name:ip:port".
+server_stats = {}
+for service in SERVICES:
+    service_name = service.get("name")
+    for server in service.get("servers", []):
+        key = f"{service_name}:{server['ip']}:{server['port']}"
+        server_stats[key] = {
+            "bytes_transferred": 0,
+            "bytes_out": 0,
+            "bytes_in": 0
+        }
 
 # For display purposes, maintain a status dictionary per service.
 server_status = {}
@@ -121,27 +142,42 @@ server_status = {}
 def read_socat_output(service_name, proc):
     """
     Reads socat's verbose output (launched with -v) from proc.stdout,
-    and updates the byte counters in service_state.
-    It distinguishes outbound (lines containing ">") and inbound (lines containing "<").
+    and updates both service-level and per-server byte counters.
+    It distinguishes outbound (lines containing "> ") and inbound (lines containing "< ").
     """
+    # Determine the key for the currently active server.
+    active_server = service_state[service_name]["last_active"]  # format "ip:port"
+    server_key = f"{service_name}:{active_server}" if active_server else None
     while True:
         line = proc.stdout.readline()
         if not line:
             break
         line = line.strip()
-        print(f"[socat-{service_name}] {line}")
+#        print(f"[socat-{service_name}] {line}")
         if "length=" in line:
             match = re.search(r"length=(\d+)", line)
             if match:
                 try:
                     bytes_count = int(match.group(1))
-                    # Update combined counter
+                    # Update service-level counters.
                     service_state[service_name]["bytes_transferred"] += bytes_count
-                    # Update based on direction (using '> ' and '< ' in the line)
                     if "> " in line:
                         service_state[service_name]["bytes_out"] += bytes_count
                     elif "< " in line:
                         service_state[service_name]["bytes_in"] += bytes_count
+                    # Also update per-server counters.
+                    if server_key:
+                        if server_key not in server_stats:
+                            server_stats[server_key] = {
+                                "bytes_transferred": 0,
+                                "bytes_out": 0,
+                                "bytes_in": 0
+                            }
+                        server_stats[server_key]["bytes_transferred"] += bytes_count
+                        if "> " in line:
+                            server_stats[server_key]["bytes_out"] += bytes_count
+                        elif "< " in line:
+                            server_stats[server_key]["bytes_in"] += bytes_count
                 except ValueError:
                     pass
 
@@ -149,7 +185,7 @@ def read_socat_output(service_name, proc):
 # BACKGROUND HEALTH CHECK / SOCAT UPDATE THREAD
 # ====================================================
 def update_servers():
-    global server_status, SERVICES, service_state, event_loop
+    global server_status, SERVICES, service_state, event_loop, server_stats
     while True:
         for service in SERVICES:
             service_name = service.get("name")
@@ -176,53 +212,72 @@ def update_servers():
                     healthy_servers.append(f"{ip}:{port}")
             
             if healthy_servers:
-                if mode_for_service == "failover":
-                    selected_server = healthy_servers[0]
-                elif mode_for_service == "round-robin":
+                # --- Round Robin Mode Handling ---
+                if mode_for_service == "round-robin":
+                    # Force rotation: restart socat even if a process is running after a fixed interval.
+                    current_proc = service_state[service_name]["process"]
+                    now = time.time()
+                    last_start = service_state[service_name].get("last_start_time") or 0
+                    if current_proc is not None and current_proc.poll() is None:
+                        # If less than ROTATION_INTERVAL has passed, do nothing.
+                        if now - last_start < ROTATION_INTERVAL:
+                            continue
                     idx = service_state[service_name]["index"]
                     selected_server = healthy_servers[idx % len(healthy_servers)]
                     service_state[service_name]["index"] = idx + 1
-                else:
+                else:  # Failover Mode
                     selected_server = healthy_servers[0]
+                    if selected_server == service_state[service_name]["last_active"]:
+                        current_proc = service_state[service_name]["process"]
+                        if current_proc is not None and current_proc.poll() is None:
+                            continue
 
-                if selected_server != service_state[service_name]["last_active"]:
-                    log_message = (f"Routing traffic on port {listen_port} to {selected_server} "
-                                   f"for service '{service_name}' (mode: {mode_for_service})")
-                    print(log_message)
-                    if event_loop:
-                        asyncio.run_coroutine_threadsafe(manager.broadcast(log_message), event_loop)
-                    
-                    # Update socat stats.
-                    service_state[service_name]["restart_count"] += 1
-                    service_state[service_name]["last_start_time"] = time.time()
-
-                    prev_proc = service_state[service_name]["process"]
-                    if prev_proc and prev_proc.poll() is None:
-                        prev_proc.terminate()
-                        prev_proc.wait()
-                    
-                    # Launch socat with verbose output enabled (-v).
-                    cmd = [
-                        "socat",
-                        "-v",
-                        f"TCP-LISTEN:{listen_port},fork,reuseaddr",
-                        f"TCP:{selected_server}"
-                    ]
-                    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-                    service_state[service_name]["process"] = proc
-                    service_state[service_name]["last_active"] = selected_server
-
-                    # Spawn a thread to parse socat output.
-                    threading.Thread(target=read_socat_output, args=(service_name, proc), daemon=True).start()
+                log_message = (f"Routing traffic on port {listen_port} to {selected_server} "
+                               f"for service '{service_name}' (mode: {mode_for_service})")
+                print(log_message)
+                if event_loop:
+                    asyncio.run_coroutine_threadsafe(manager.broadcast(log_message), event_loop)
+                
+                service_state[service_name]["restart_count"] += 1
+                service_state[service_name]["last_start_time"] = time.time()
+                
+                # Terminate previous process if still running.
+                prev_proc = service_state[service_name]["process"]
+                if prev_proc and prev_proc.poll() is None:
+                    prev_proc.terminate()
+                    prev_proc.wait()
+                
+                # Start socat in verbose mode (-v) to capture stats.
+                cmd = [
+                    "socat",
+                    "-v",
+                    f"TCP-LISTEN:{listen_port},fork,reuseaddr",
+                    f"TCP:{selected_server}"
+                ]
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                service_state[service_name]["process"] = proc
+                service_state[service_name]["last_active"] = selected_server
+                
+                # Initialize per-server stats for this backend if not already done.
+                server_key = f"{service_name}:{selected_server}"
+                if server_key not in server_stats:
+                    server_stats[server_key] = {
+                        "bytes_transferred": 0,
+                        "bytes_out": 0,
+                        "bytes_in": 0
+                    }
+                
+                # Start a thread to parse socat output.
+                threading.Thread(target=read_socat_output, args=(service_name, proc), daemon=True).start()
             else:
                 log_message = f"No healthy servers available on port {listen_port} for service '{service_name}'"
                 print(log_message)
                 if event_loop:
                     asyncio.run_coroutine_threadsafe(manager.broadcast(log_message), event_loop)
-                prev_proc = service_state[service_name]["process"]
-                if prev_proc and prev_proc.poll() is None:
-                    prev_proc.terminate()
-                    prev_proc.wait()
+                current_proc = service_state[service_name]["process"]
+                if current_proc and current_proc.poll() is None:
+                    current_proc.terminate()
+                    current_proc.wait()
                 service_state[service_name]["last_active"] = None
         
         time.sleep(CHECK_INTERVAL)
@@ -240,7 +295,6 @@ async def lifespan(app: FastAPI):
     event_loop = asyncio.get_running_loop()
     start_background_thread()
     yield
-    # (Optional) Shutdown cleanup
 
 app = FastAPI(lifespan=lifespan)
 
@@ -310,20 +364,20 @@ class RemoveServiceRequest(BaseModel):
     name: str
 
 # ====================================================
-# Additional Endpoint: Socat Stats (Including Packet/Byte Stats)
+# Additional Endpoint: Socat Stats for Service and for Server
 # ====================================================
 @app.get("/api/socat_stats")
 def socat_stats():
     """
-    Returns statistics for the socat processes.
+    Returns socat statistics aggregated per service.
     For each service, stats include:
       - last_active: currently routed destination
       - restart_count: number of times socat was restarted
       - last_start_time: UNIX timestamp when socat was last started
       - pid: process ID (if socat is running)
-      - bytes_transferred: total bytes parsed from socat output
-      - bytes_out: outbound bytes
-      - bytes_in: inbound bytes
+      - bytes_transferred: total bytes parsed from socat output (service-level)
+      - bytes_out: outbound bytes (service-level)
+      - bytes_in: inbound bytes (service-level)
     """
     stats = {}
     for service_name, state in service_state.items():
@@ -337,6 +391,17 @@ def socat_stats():
             "bytes_in": state.get("bytes_in", 0)
         }
     return {"socat_stats": stats}
+
+@app.get("/api/socat_stats_by_server")
+def socat_stats_by_server():
+    """
+    Returns socat statistics aggregated per server (backend).
+    Keys are in the format "service_name:ip:port" and stats include:
+      - bytes_transferred: total bytes parsed from socat output
+      - bytes_out: outbound bytes
+      - bytes_in: inbound bytes
+    """
+    return {"socat_stats_by_server": server_stats}
 
 # ====================================================
 # FastAPI Endpoints for Load Balancer & Management
@@ -372,7 +437,7 @@ def edit_server(req: EditServerRequest):
     service = next((s for s in SERVICES if s.get("name") == service_name), None)
     if not service:
         raise HTTPException(status_code=404, detail="Service group not found")
-    
+
     for server in service.get("servers", []):
         if server["ip"] == ip and int(server["port"]) == int(port):
             if new_ip:
@@ -383,7 +448,7 @@ def edit_server(req: EditServerRequest):
                 server["check_type"] = check_type
             save_config()
             return {"message": f"Server {ip}:{port} edited successfully in service '{service_name}'"}
-    
+
     raise HTTPException(status_code=404, detail="Server not found in service group")
 
 @app.post("/api/add_server")
@@ -413,6 +478,10 @@ def add_server(req: AddServerRequest):
         new_server["http_path"] = req.http_path
 
     service.setdefault("servers", []).append(new_server)
+    # Initialize per-server stats for this new server.
+    server_key = f"{service_name}:{ip}:{port}"
+    if server_key not in server_stats:
+        server_stats[server_key] = {"bytes_transferred": 0, "bytes_out": 0, "bytes_in": 0}
     save_config()
     return {"message": f"Server {ip}:{port} added successfully to service '{service_name}'"}
 
@@ -429,6 +498,10 @@ def remove_server(req: RemoveServerRequest):
     for server in service.get("servers", []):
         if server["ip"] == ip and int(server["port"]) == int(port):
             service.get("servers", []).remove(server)
+            # Remove per-server stats if they exist.
+            server_key = f"{service_name}:{ip}:{port}"
+            if server_key in server_stats:
+                del server_stats[server_key]
             save_config()
             return {"message": f"Server {ip}:{port} removed successfully from service '{service_name}'"}
     

@@ -3,7 +3,7 @@
         {
             "name": "hlr",
             "listen_port": 8080,
-            "mode": "round-robin",
+            "mode": "failover",
             "servers": [
                 {
                     "ip": "172.16.20.68",
