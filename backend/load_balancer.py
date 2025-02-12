@@ -195,6 +195,12 @@ def update_servers():
             server_status[service_name] = {}
             
             for server in service.get("servers", []):
+                # Only consider servers that are enabled.
+                if not server.get("enabled", True):
+                    key = f"{server['ip']}:{server['port']} ({server.get('check_type', 'tcp')})"
+                    server_status[service_name][key] = "❌ DISABLED"
+                    continue
+
                 ip = server["ip"]
                 port = int(server["port"])
                 check_type = server.get("check_type", "tcp")
@@ -363,6 +369,11 @@ class EditServiceRequest(BaseModel):
 class RemoveServiceRequest(BaseModel):
     name: str
 
+class ToggleServerRequest(BaseModel):
+    service: str
+    ip: str
+    port: int
+
 # ====================================================
 # Additional Endpoint: Socat Stats for Service and for Server
 # ====================================================
@@ -473,7 +484,8 @@ def add_server(req: AddServerRequest):
     if any(s["ip"] == ip and int(s["port"]) == int(port) for s in service.get("servers", [])):
         raise HTTPException(status_code=400, detail="Server already exists in service group")
 
-    new_server = {"ip": ip, "port": int(port), "check_type": check_type}
+    # Add "enabled": True by default.
+    new_server = {"ip": ip, "port": int(port), "check_type": check_type, "enabled": True}
     if check_type == "http":
         new_server["http_path"] = req.http_path
 
@@ -582,6 +594,26 @@ def remove_service(req: RemoveServiceRequest):
         del service_state[req.name]
     save_config()
     return {"message": f"Service '{req.name}' removed successfully."}
+
+@app.post("/api/toggle_server")
+def toggle_server(req: ToggleServerRequest):
+    service_name = req.service
+    ip = req.ip
+    port = req.port
+
+    service = next((s for s in SERVICES if s.get("name") == service_name), None)
+    if not service:
+        raise HTTPException(status_code=404, detail="Service group not found")
+
+    for server in service.get("servers", []):
+        if server["ip"] == ip and int(server["port"]) == int(port):
+            # Toggle the enabled flag.
+            current_status = server.get("enabled", True)
+            server["enabled"] = not current_status
+            save_config()
+            return {"message": f"Server {ip}:{port} toggled successfully in service '{service_name}'. Now enabled: {server['enabled']}"}
+
+    raise HTTPException(status_code=404, detail="Server not found in service group")
 
 # ====================================================
 # Main entry point

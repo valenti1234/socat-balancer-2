@@ -9,15 +9,23 @@
                     "ip": "172.16.20.68",
                     "port": 8080,
                     "check_type": "http",
-                    "http_path": "/"
+                    "http_path": "/",
+                    "enabled": false
                 },
                 {
                     "ip": "172.16.18.68",
                     "port": 8080,
                     "check_type": "http",
-                    "http_path": "/"
+                    "http_path": "/",
+                    "enabled": true
                 }
             ]
+        },
+        {
+            "name": "omni",
+            "listen_port": 15600,
+            "mode": "failover",
+            "servers": []
         }
     ]
 }

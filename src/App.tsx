@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Activity, Server, Settings, Plus, Edit2, Trash2, RefreshCcw, AlertCircle, X } from 'lucide-react';
+import { Activity, Server, Settings, Plus, Edit2, Trash2, RefreshCcw, AlertCircle, X, BarChart, Power } from 'lucide-react';
 
 interface Server {
   ip: string;
   port: number;
   check_type: string;
   http_path?: string;
+  enabled?: boolean;
 }
 
 interface Service {
@@ -19,6 +20,39 @@ interface Status {
   [serviceName: string]: {
     [serverKey: string]: string;
   };
+}
+
+interface SocatStats {
+  [serviceName: string]: {
+    last_active: string | null;
+    restart_count: number;
+    last_start_time: number | null;
+    pid: number | null;
+    bytes_transferred: number;
+    bytes_out: number;
+    bytes_in: number;
+  };
+}
+
+interface ServerStats {
+  [serverKey: string]: {
+    bytes_transferred: number;
+    bytes_out: number;
+    bytes_in: number;
+  };
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function formatDate(timestamp: number | null): string {
+  if (!timestamp) return 'Never';
+  return new Date(timestamp * 1000).toLocaleString();
 }
 
 function App() {
@@ -36,6 +70,8 @@ function App() {
   const [selectedServiceForServer, setSelectedServiceForServer] = useState<string>('');
   const [selectedServiceForEdit, setSelectedServiceForEdit] = useState<Service | null>(null);
   const refreshIntervalRef = useRef<number>();
+  const [socatStats, setSocatStats] = useState<SocatStats>({});
+  const [serverStats, setServerStats] = useState<ServerStats>({});
 
   const [newService, setNewService] = useState({
     name: '',
@@ -54,7 +90,8 @@ function App() {
     ip: '',
     port: '',
     check_type: 'tcp',
-    http_path: '/'
+    http_path: '/',
+    enabled: true
   });
 
   const clearLogs = () => {
@@ -77,18 +114,16 @@ function App() {
     };
   }, [backendAvailable]);
 
-  // Add auto-refresh effect
   useEffect(() => {
     if (backendAvailable) {
-      // Initial fetch
       fetchData();
+      fetchSocatStats();
       
-      // Set up interval for auto-refresh every 15 seconds
       refreshIntervalRef.current = window.setInterval(() => {
         fetchData();
-      }, 15000);
+        fetchSocatStats();
+      }, 20000);
 
-      // Cleanup interval on unmount or when backend becomes unavailable
       return () => {
         if (refreshIntervalRef.current) {
           clearInterval(refreshIntervalRef.current);
@@ -96,6 +131,72 @@ function App() {
       };
     }
   }, [backendAvailable]);
+
+  const fetchSocatStats = async () => {
+    if (!backendAvailable) return;
+
+    try {
+      const [statsRes, serverStatsRes] = await Promise.all([
+        fetch('/api/socat_stats'),
+        fetch('/api/socat_stats_by_server')
+      ]);
+
+      if (!statsRes.ok || !serverStatsRes.ok) {
+        throw new Error('Failed to fetch socat stats');
+      }
+
+      const statsData = await statsRes.json();
+      const serverStatsData = await serverStatsRes.json();
+
+      setSocatStats(statsData.socat_stats);
+      setServerStats(serverStatsData.socat_stats_by_server);
+    } catch (error) {
+      console.error('Error fetching socat stats:', error);
+    }
+  };
+
+  const handleToggleServer = async (serviceName: string, ip: string, port: number, currentEnabled: boolean) => {
+    try {
+      const response = await fetch('/api/toggle_server', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          service: serviceName,
+          ip,
+          port,
+          enabled: !currentEnabled
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to toggle server');
+      }
+
+      setServices(prevServices => 
+        prevServices.map(service => {
+          if (service.name === serviceName) {
+            return {
+              ...service,
+              servers: service.servers.map(server => {
+                if (server.ip === ip && server.port === port) {
+                  return { ...server, enabled: !currentEnabled };
+                }
+                return server;
+              })
+            };
+          }
+          return service;
+        })
+      );
+
+      await fetchData();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to toggle server');
+    }
+  };
 
   const checkBackendStatus = async () => {
     try {
@@ -309,6 +410,7 @@ function App() {
           ip: newServer.ip,
           port: parseInt(newServer.port),
           check_type: newServer.check_type,
+          enabled: newServer.enabled,
           ...(newServer.check_type === 'http' && { http_path: newServer.http_path })
         }),
       });
@@ -318,10 +420,9 @@ function App() {
         throw new Error(errorData.detail || 'Failed to add server');
       }
 
-      setNewServer({ ip: '', port: '', check_type: 'tcp', http_path: '/' });
+      setNewServer({ ip: '', port: '', check_type: 'tcp', http_path: '/', enabled: true });
       setShowAddServerModal(false);
       
-      // Refresh the services list and status immediately after adding a server
       await fetchData();
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Failed to add server');
@@ -462,6 +563,12 @@ function App() {
                         <div>
                           <h3 className="text-lg font-medium text-gray-900">{service.name}</h3>
                           <p className="text-sm text-gray-500">Port: {service.listen_port}</p>
+                          {socatStats[service.name] && (
+                            <div className="mt-2 text-sm text-gray-600">
+                              <p>Traffic: {formatBytes(socatStats[service.name].bytes_transferred)}</p>
+                              <p>Last Active: {socatStats[service.name].last_active || 'None'}</p>
+                            </div>
+                          )}
                         </div>
                         <div className="flex space-x-2">
                           <button
@@ -496,35 +603,55 @@ function App() {
                       </div>
 
                       <div className="space-y-2">
-                        {service.servers.map((server) => (
-                          <div
-                            key={`${server.ip}:${server.port}`}
-                            className="flex justify-between items-center bg-gray-50 rounded p-2"
-                          >
-                            <div>
-                              <p className="text-sm font-medium">{server.ip}:{server.port}</p>
-                              <p className="text-xs text-gray-500">Type: {server.check_type}</p>
+                        {service.servers.map((server) => {
+                          const serverKey = `${service.name}:${server.ip}:${server.port}`;
+                          const serverStat = serverStats[serverKey];
+                          
+                          return (
+                            <div
+                              key={`${server.ip}:${server.port}`}
+                              className="flex justify-between items-center bg-gray-50 rounded p-2"
+                            >
+                              <div>
+                                <p className="text-sm font-medium">{server.ip}:{server.port}</p>
+                                <p className="text-xs text-gray-500">Type: {server.check_type}</p>
+                                {serverStat && (
+                                  <p className="text-xs text-gray-600">
+                                    Traffic: {formatBytes(serverStat.bytes_transferred)}
+                                  </p>
+                                )}
+                              </div>
+                              <div className="flex items-center space-x-2">
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                                  status[service.name]?.[`${server.ip}:${server.port} (${server.check_type})`]?.includes('UP')
+                                    ? 'bg-green-100 text-green-800'
+                                    : 'bg-red-100 text-red-800'
+                                }`}>
+                                  {status[service.name]?.[`${server.ip}:${server.port} (${server.check_type})`] || 'Unknown'}
+                                </span>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleToggleServer(service.name, server.ip, server.port, server.enabled ?? true);
+                                  }}
+                                  className={`p-1 ${server.enabled ? 'text-green-600' : 'text-gray-400'} hover:text-indigo-600`}
+                                  title={server.enabled ? 'Disable Server' : 'Enable Server'}
+                                >
+                                  <Power className="h-4 w-4" />
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleRemoveServer(service.name, server.ip, server.port);
+                                  }}
+                                  className="p-1 text-gray-400 hover:text-red-600"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </div>
                             </div>
-                            <div className="flex items-center space-x-2">
-                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                                status[service.name]?.[`${server.ip}:${server.port} (${server.check_type})`]?.includes('UP')
-                                  ? 'bg-green-100 text-green-800'
-                                  : 'bg-red-100 text-red-800'
-                              }`}>
-                                {status[service.name]?.[`${server.ip}:${server.port} (${server.check_type})`] || 'Unknown'}
-                              </span>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleRemoveServer(service.name, server.ip, server.port);
-                                }}
-                                className="p-1 text-gray-400 hover:text-red-600"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                         <button 
                           onClick={(e) => {
                             e.stopPropagation();
@@ -547,6 +674,40 @@ function App() {
                   </button>
                 </div>
               )}
+            </div>
+
+            {/* Socat Stats Panel */}
+            <div className="bg-white shadow rounded-lg p-6">
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-lg font-medium text-gray-900">Traffic Statistics</h2>
+                <button
+                  onClick={fetchSocatStats}
+                  className="inline-flex items-center px-3 py-1.5 border border-transparent text-sm font-medium rounded-md text-indigo-600 bg-indigo-100 hover:bg-indigo-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                >
+                  <BarChart className="h-4 w-4 mr-1" />
+                  Refresh Stats
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                {Object.entries(socatStats).map(([serviceName, stats]) => (
+                  <div key={serviceName} className="border rounded-lg p-4">
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">{serviceName}</h3>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <p className="text-sm text-gray-600">Total Traffic: {formatBytes(stats.bytes_transferred)}</p>
+                        <p className="text-sm text-gray-600">Outbound: {formatBytes(stats.bytes_out)}</p>
+                        <p className="text-sm text-gray-600">Inbound: {formatBytes(stats.bytes_in)}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-600">Active Backend: {stats.last_active || 'None'}</p>
+                        <p className="text-sm text-gray-600">Last Started: {formatDate(stats.last_start_time)}</p>
+                        <p className="text-sm text-gray-600">Restarts: {stats.restart_count}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -602,7 +763,8 @@ function App() {
                     required
                   />
                 </div>
-                <div>
+                <div> Continuing with the App.tsx file content from where we left off:
+
                   <label htmlFor="listen_port" className="block text-sm font-medium text-gray-700">
                     Listen Port
                   </label>
@@ -733,7 +895,7 @@ function App() {
         <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg max-w-md w-full p-6">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-medium text-gray-900">Add New Server</h3 >
+              <h3 className="text-lg font-medium text-gray-900">Add New Server</h3>
               <button
                 onClick={() => setShowAddServerModal(false)}
                 className="text-gray-400 hover:text-gray-500"
@@ -803,6 +965,18 @@ function App() {
                     />
                   </div>
                 )}
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    id="enabled"
+                    checked={newServer.enabled}
+                    onChange={(e) => setNewServer(prev => ({ ...prev, enabled: e.target.checked }))}
+                    className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                  />
+                  <label htmlFor="enabled" className="ml-2 block text-sm text-gray-900">
+                    Enable server immediately
+                  </label>
+                </div>
               </div>
               <div className="mt-6 flex justify-end space-x-3">
                 <button
